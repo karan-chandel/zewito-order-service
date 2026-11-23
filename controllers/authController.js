@@ -172,7 +172,7 @@ exports.verifyOtp = async (req, res, next) => {
     const existingRider = await Rider.findOne({ phone });
 
     const isPlaceholder = (n) => !n || /^User[_\d]+/i.test(String(n).trim()) || /^Rider[_\d]+/i.test(String(n).trim()) || /^Partner[_\d]+/i.test(String(n).trim());
-    const providedName = (name && name.trim()) ? name.trim() : null;
+    const providedName = (name && name.trim() && !isPlaceholder(name)) ? name.trim() : null;
     const existingRealName = [existingCustomer?.name, existingRestaurantUser?.name, existingRider?.name, baseUser?.name].find(n => n && !isPlaceholder(n)) || null;
     const resolvedName = providedName || existingRealName || "";
 
@@ -257,14 +257,17 @@ exports.verifyOtp = async (req, res, next) => {
         if (!roleSpecificUser) {
           roleSpecificUser = await Rider.create({
             ...profileData,
-            vehicleNo: additionalData?.vehicleNo || 'NOT_SET',
+            vehicleNo: additionalData?.vehicleNo || "",
             vehicleType: additionalData?.vehicleType || 'bike',
             licenseNumber: additionalData?.licenseNumber || null,
             currentLocation: additionalData?.currentLocation || null,
             isAvailable: false,
             earnings: 0,
             totalDeliveries: 0,
-            rating: 0
+            rating: 0,
+            verificationStatus: 'incomplete',
+            isProfileComplete: false,
+            isVerified: false,
           });
         } else {
           roleSpecificUser = await Rider.findByIdAndUpdate(roleSpecificUser._id, { lastLogin: new Date() }, { new: true });
@@ -314,7 +317,34 @@ exports.verifyOtp = async (req, res, next) => {
       req
     });
 
-    const isProfileComplete = Boolean(baseUser.name && baseUser.name.trim() && !isPlaceholder(baseUser.name));
+    let isProfileComplete = Boolean(baseUser.name && baseUser.name.trim() && !isPlaceholder(baseUser.name));
+    let verificationStatus = 'incomplete';
+    let onboardingStep = 'incomplete';
+
+    if (baseUser.role === 'rider') {
+      const hasRealName = Boolean(baseUser.name && baseUser.name.trim() && !isPlaceholder(baseUser.name));
+      const isBicycle = roleSpecificUser?.vehicleType === 'bicycle' || roleSpecificUser?.vehicleType === 'cycle';
+      const hasVehicle = isBicycle || Boolean(roleSpecificUser?.vehicleNo && roleSpecificUser.vehicleNo.trim() && roleSpecificUser.vehicleNo !== 'NOT_SET');
+      const hasLicense = isBicycle || Boolean(roleSpecificUser?.licenseNumber && roleSpecificUser.licenseNumber.trim());
+      isProfileComplete = Boolean(hasRealName && hasVehicle && hasLicense);
+
+      if (roleSpecificUser?.isVerified || roleSpecificUser?.verificationStatus === 'approved') {
+        verificationStatus = 'approved';
+        onboardingStep = 'approved';
+      } else if (roleSpecificUser?.verificationStatus === 'rejected') {
+        verificationStatus = 'rejected';
+        onboardingStep = 'rejected';
+      } else if (isProfileComplete || roleSpecificUser?.verificationStatus === 'pending') {
+        verificationStatus = 'pending';
+        onboardingStep = 'pending';
+      } else {
+        verificationStatus = 'incomplete';
+        onboardingStep = 'incomplete';
+      }
+    } else {
+      verificationStatus = baseUser.isVerified ? 'approved' : 'pending';
+      onboardingStep = isProfileComplete ? 'approved' : 'incomplete';
+    }
 
     let userResponse = {
       id: baseUser._id,
@@ -324,8 +354,10 @@ exports.verifyOtp = async (req, res, next) => {
       profilePicture: baseUser.profilePicture || null,
       addresses: baseUser.addresses || [],
       role: baseUser.role,
-      isVerified: baseUser.isVerified,
+      isVerified: Boolean(baseUser.isVerified),
       isProfileComplete,
+      verificationStatus,
+      onboardingStep,
       lastLogin: baseUser.lastLogin
     };
 
@@ -364,6 +396,9 @@ exports.verifyOtp = async (req, res, next) => {
       accessToken,
       refreshToken,
       expiresIn: 3600,
+      isProfileComplete,
+      verificationStatus,
+      onboardingStep,
       user: userResponse
     });
   } catch (err) {

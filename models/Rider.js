@@ -7,15 +7,27 @@ const riderSchema = new mongoose.Schema({
   profilePicture: String,
   role: { type: String, default: 'rider' },
   isVerified: { type: Boolean, default: false },
+  verificationStatus: {
+    type: String,
+    enum: ['incomplete', 'pending', 'approved', 'rejected'],
+    default: 'incomplete'
+  },
+  isProfileComplete: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
   lastLogin: Date,
   
+  // Location details
+  city: { type: String, trim: true },
+  pincode: { type: String, trim: true },
+
   // Enhanced Rider-specific fields
-  vehicleNo: { type: String},
-  vehicleType: { type: String, enum: ['bike', 'scooter', 'cycle'], default: 'bike' },
-  licenseNumber: { type: String},
+  vehicleNo: { type: String, trim: true },
+  vehicleType: { type: String, enum: ['bike', 'scooter', 'bicycle', 'cycle', 'ev'], default: 'bike' },
+  licenseNumber: { type: String, trim: true },
   licensePhoto: String, // URL to license image
   vehiclePhoto: String, // URL to vehicle image
+  panNumber: { type: String, trim: true },
+  panPhoto: String,
   aadharNumber: String,
   bankAccountNumber: String,
   bankIFSC: String,
