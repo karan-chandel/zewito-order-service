@@ -11,7 +11,7 @@ const envAllowlist = (process.env.FRONTEND_URL || process.env.ALLOWED_ORIGINS ||
 
 const baseAllowlist = [
   "https://admin.socket.io",
-  "https://zewito-api-gateway.onrender.com"
+  "https://zewito-api-gateway-rfll.onrender.com"
 ];
 
 // Dual-Environment: Automatically allow all local development frontend & microservice ports
@@ -67,7 +67,7 @@ module.exports = {
   CORE_PLATFORM_URL: orderServiceUrl,
   CATALOG_SERVICE_URL:
     process.env.CATALOG_SERVICE_URL ||
-    (isDev ? "http://localhost:4001" : "https://zewito-catalog-service.onrender.com"),
+    (isDev ? "http://localhost:4001" : "https://zewito-catalog-service-fl4q.onrender.com"),
   RIDER_SERVICE_URL:
     process.env.RIDER_SERVICE_URL ||
     (isDev ? "http://localhost:5054" : "https://zewito-rider-service-5j83.onrender.com"),
@@ -82,7 +82,7 @@ module.exports = {
     (isDev ? "http://localhost:5053" : "https://zewito-admin-service.onrender.com"),
   GATEWAY_URL:
     process.env.GATEWAY_URL ||
-    (isDev ? "http://localhost:8000" : "https://zewito-api-gateway.onrender.com"),
+    (isDev ? "http://localhost:8000" : "https://zewito-api-gateway-rfll.onrender.com"),
   INTERNAL_SERVICE_SECRET: process.env.INTERNAL_SERVICE_SECRET || "d778a0a96422d9c1203f62e9753cbbb2fb9b175e41295e5a1d02ed0224152595",
   REDIS_URL: process.env.REDIS_URL || process.env.REDIS_URI || "",
   SMS_CLOUD_API_KEY: process.env.SMS_CLOUD_API_KEY || "",
