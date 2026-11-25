@@ -155,13 +155,41 @@ router.post("/verify-user", async (req, res, next) => {
     }
 
     const updates = [];
-    updates.push(User.findByIdAndUpdate(userId, { $set: { isVerified: Boolean(isVerified) } }));
-    if (role === "rider") {
-      updates.push(Rider.findByIdAndUpdate(userId, { $set: { isVerified: Boolean(isVerified) } }));
-    } else if (role === "restaurant") {
+    if (role === "restaurant") {
+      const matchedRestaurant = await Restaurant.findOne({
+        $or: [{ _id: userId }, { ownerId: userId }],
+      }).select("_id ownerId");
+      const ownerId = matchedRestaurant?.ownerId || userId;
+      const restaurantId = matchedRestaurant?._id;
+
+      updates.push(User.findByIdAndUpdate(ownerId, { $set: { isVerified: Boolean(isVerified) } }));
       updates.push(
-        RestaurantUser.findByIdAndUpdate(userId, { $set: { isVerified: Boolean(isVerified) } })
+        RestaurantUser.findOneAndUpdate(
+          {
+            $or: [
+              { _id: ownerId },
+              { _id: userId },
+              ...(restaurantId ? [{ restaurantId }] : []),
+            ],
+          },
+          { $set: { isVerified: Boolean(isVerified) } }
+        )
       );
+      if (restaurantId) {
+        updates.push(
+          Restaurant.findByIdAndUpdate(restaurantId, {
+            $set: {
+              verificationStatus: isVerified ? "approved" : "rejected",
+              isActive: Boolean(isVerified),
+            },
+          })
+        );
+      }
+    } else {
+      updates.push(User.findByIdAndUpdate(userId, { $set: { isVerified: Boolean(isVerified) } }));
+      if (role === "rider") {
+        updates.push(Rider.findByIdAndUpdate(userId, { $set: { isVerified: Boolean(isVerified) } }));
+      }
     }
 
     await Promise.all(updates);
@@ -199,7 +227,7 @@ router.post("/restaurant-sync", async (req, res, next) => {
       minOrderAmount,
       deliveryFee,
     } = req.body;
-    const partnerId = userId || ownerId;
+    const partnerId = ownerId || userId;
 
     if (!partnerId && !restaurantId) {
       return res.status(400).json({ success: false, error: "userId/ownerId or restaurantId is required" });
