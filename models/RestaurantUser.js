@@ -11,7 +11,7 @@ const restaurantUserSchema = new mongoose.Schema({
   lastLogin: Date,
   // Restaurant-specific fields
   restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant' },
-  businessName: { type: String, required: true },
+  businessName: { type: String, required: false, default: "", trim: true },
   gstNumber: String,
   gstCertificate: String, // File path
   bankAccountNumber: String,
