@@ -716,32 +716,62 @@ function initializeSocket(server) {
         });
 
         // ✅ HIGH-THROUGHPUT: Rider app location update (Redis Geospatial + Write-Behind Throttling)
-        socket.on('rider_app_location_update', async (data) => {
+        const handleRiderLocationBroadcast = async (data) => {
             try {
-                const { orderId, lat, lng, address, speed, heading } = data;
-                if (lat === undefined || lng === undefined) return;
+                if (!data) return;
+                const orderId = data.orderId;
+                const rawLat = data.lat ?? data.latitude ?? data.location?.lat ?? data.currentLocation?.lat;
+                const rawLng = data.lng ?? data.longitude ?? data.location?.lng ?? data.currentLocation?.lng;
+                const address = data.address ?? data.location?.address ?? data.currentLocation?.address ?? '';
+                const { speed, heading } = data;
 
-                const numericLat = parseFloat(lat);
-                const numericLng = parseFloat(lng);
-                if (isNaN(numericLat) || isNaN(numericLng)) return;
+                if (rawLat === undefined || rawLng === undefined) return;
+
+                const numericLat = parseFloat(rawLat);
+                const numericLng = parseFloat(rawLng);
+                if (
+                    isNaN(numericLat) ||
+                    isNaN(numericLng) ||
+                    numericLat < -90 ||
+                    numericLat > 90 ||
+                    numericLng < -180 ||
+                    numericLng > 180 ||
+                    (numericLat === 0 && numericLng === 0)
+                ) {
+                    return;
+                }
+
+                const riderIdStr = String(data.riderId || socket.userId);
+                let effectiveOrder = null;
+                let effectiveOrderId = orderId ? String(orderId) : '';
+                if (!effectiveOrderId) {
+                    const riderDoc = await Rider.findById(riderIdStr).select('currentOrder name').lean();
+                    if (riderDoc?.currentOrder) {
+                        effectiveOrder = await Order.findById(riderDoc.currentOrder).select('_id orderId customerId restaurantId').lean();
+                        effectiveOrderId = effectiveOrder?.orderId || String(riderDoc.currentOrder);
+                    }
+                } else {
+                    effectiveOrder = await findOrderById(effectiveOrderId);
+                }
 
                 // 1. Instant Redis Geospatial index & cache update (< 1ms)
                 recordRiderLocation({
-                    riderId: socket.userId,
+                    riderId: riderIdStr,
                     lat: numericLat,
                     lng: numericLng,
                     address,
-                    orderId,
-                    riderName: socket.userName,
+                    orderId: effectiveOrderId,
+                    riderName: data.riderName || socket.userName,
                     speed,
                     heading
                 }).catch(() => {});
 
                 // 2. Instantly broadcast to tracking room (Zero-latency UI updates, full payload)
                 const trackingPayload = {
-                    orderId,
-                    riderId: socket.userId,
-                    riderName: socket.userName,
+                    orderId: effectiveOrder?.orderId || effectiveOrderId,
+                    orderMongoId: effectiveOrder?._id ? String(effectiveOrder._id) : undefined,
+                    riderId: riderIdStr,
+                    riderName: data.riderName || socket.userName,
                     lat: numericLat,
                     lng: numericLng,
                     location: { lat: numericLat, lng: numericLng },
@@ -750,11 +780,21 @@ function initializeSocket(server) {
                     timestamp: new Date()
                 };
 
-                io.to(`order_${orderId}`).emit('rider_location_changed', trackingPayload);
+                const targetRooms = new Set();
+                if (effectiveOrderId) targetRooms.add(`order_${effectiveOrderId}`);
+                if (effectiveOrder?.orderId) targetRooms.add(`order_${effectiveOrder.orderId}`);
+                if (effectiveOrder?._id) targetRooms.add(`order_${effectiveOrder._id}`);
+                if (effectiveOrder?.customerId) targetRooms.add(`user_${effectiveOrder.customerId._id || effectiveOrder.customerId}`);
+                if (effectiveOrder?.restaurantId) targetRooms.add(`restaurant_${effectiveOrder.restaurantId._id || effectiveOrder.restaurantId}`);
+
+                targetRooms.forEach((room) => {
+                    io.to(room).emit('rider_location_changed', trackingPayload);
+                    io.to(room).emit('rider_location_update', trackingPayload);
+                });
 
                 // 3. High-throughput Write-Behind: Throttle MongoDB disk writes to at most once per 15s
-                if (shouldPersistToDb(socket.userId, 15000)) {
-                    Rider.findByIdAndUpdate(socket.userId, {
+                if (shouldPersistToDb(riderIdStr, 15000)) {
+                    Rider.findByIdAndUpdate(riderIdStr, {
                         currentLocation: {
                             lat: numericLat,
                             lng: numericLng,
@@ -763,9 +803,12 @@ function initializeSocket(server) {
                         }
                     }).catch(err => console.warn('⚠️ [Rider DB Write-Behind]', err.message));
 
-                    if (orderId) {
+                    if (effectiveOrder?._id || effectiveOrderId) {
+                        const orderQuery = effectiveOrder?._id
+                            ? { _id: effectiveOrder._id }
+                            : getOrderQuery(effectiveOrderId);
                         Order.findOneAndUpdate(
-                            { orderId: orderId },
+                            orderQuery,
                             {
                                 $set: {
                                     riderLocation: {
@@ -781,18 +824,19 @@ function initializeSocket(server) {
                 }
 
                 // 4. Throttled Customer Notification: At most once per 60s per order
-                if (orderId && shouldNotifyCustomer(orderId, 60000)) {
-                    const order = await findOrderById(orderId);
-                    if (order && order.customerId) {
+                if (effectiveOrderId && shouldNotifyCustomer(effectiveOrderId, 60000)) {
+                    const orderForNotify = effectiveOrder || await findOrderById(effectiveOrderId);
+                    const custId = orderForNotify?.customerId?._id || orderForNotify?.customerId;
+                    if (custId) {
                         createNotification({
-                            userId: order.customerId._id,
+                            userId: custId,
                             title: 'Rider Location Updated',
-                            message: `Rider is on the way with your order #${orderId}`,
+                            message: `Rider is on the way with your order #${effectiveOrder?.orderId || effectiveOrderId}`,
                             type: 'delivery',
                             data: {
-                                orderId,
+                                orderId: effectiveOrder?.orderId || effectiveOrderId,
                                 location: { lat: numericLat, lng: numericLng },
-                                riderName: socket.userName,
+                                riderName: data.riderName || socket.userName,
                                 type: 'rider_location'
                             },
                             priority: 'low'
@@ -801,9 +845,12 @@ function initializeSocket(server) {
                 }
 
             } catch (error) {
-                console.error('❌ SOCKET: rider_app_location_update error:', error);
+                console.error('❌ SOCKET: rider location update error:', error);
             }
-        });
+        };
+
+        socket.on('rider_app_location_update', handleRiderLocationBroadcast);
+        socket.on('rider_location_update', handleRiderLocationBroadcast);
 
         // ✅ Restaurant: Mark order as ready for pickup
         socket.on('order_ready_for_pickup', async (data) => {

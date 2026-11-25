@@ -251,10 +251,16 @@ exports.createOrder = async (req, res, next) => {
     }));
 
     // ── 3. Calculate Totals ──────────────────────────────────────────────────
-    const deliveryFee = restaurantSnapshot.deliveryFee || 0;
-    const taxRate = restaurantSnapshot.taxRate !== undefined ? restaurantSnapshot.taxRate : 5;
-    const tax = Math.round((subtotal * taxRate) / 100);
-    const finalAmount = Math.max(0, subtotal + deliveryFee + tax - (discountApplied || 0));
+    const roundCurrency = (v) => Math.round((Number(v) || 0) * 100) / 100;
+    const deliveryFee = roundCurrency(restaurantSnapshot.deliveryFee || 0);
+    const discount = roundCurrency(Math.min(subtotal, Math.max(0, discountApplied || 0)));
+    const taxableAmount = roundCurrency(Math.max(0, subtotal - discount));
+    const taxRate =
+      restaurantSnapshot.taxRate !== undefined && restaurantSnapshot.taxRate !== null
+        ? Number(restaurantSnapshot.taxRate)
+        : 5;
+    const tax = roundCurrency((taxableAmount * taxRate) / 100);
+    const finalAmount = roundCurrency(Math.max(0, taxableAmount + deliveryFee + tax));
 
     // ── 4. Apply Coupon Snapshot ─────────────────────────────────────────────
     let appliedCoupon = null;
@@ -886,6 +892,7 @@ exports.updateOrderStatus = async (req, res, next) => {
     const io = req.app.get('io');
     if (io) {
       const payload = {
+        _id: updatedOrder._id,
         orderId: updatedOrder.orderId,
         status: updatedOrder.status,
         deliveryProgress: orderObj.deliveryProgress,
@@ -903,31 +910,28 @@ exports.updateOrderStatus = async (req, res, next) => {
       const restRoomId = (updatedOrder.restaurantId?._id || updatedOrder.restaurantId)?.toString();
       const riderRoomId = updatedOrder.riderId ? (updatedOrder.riderId?._id || updatedOrder.riderId)?.toString() : null;
 
-      io.to(`order_${updatedOrder.orderId}`).emit("order_status_changed", payload);
-      if (custRoomId) io.to(`user_${custRoomId}`).emit("order_status_changed", payload);
-      if (restRoomId) io.to(`restaurant_${restRoomId}`).emit("order_status_changed", payload);
+      const statusRooms = [
+        `order_${updatedOrder.orderId}`,
+        `order_${updatedOrder._id}`,
+        custRoomId ? `user_${custRoomId}` : null,
+        restRoomId ? `restaurant_${restRoomId}` : null,
+        riderRoomId ? `rider_${riderRoomId}` : null,
+      ].filter(Boolean);
 
-      if (riderRoomId) {
-        io.to(`rider_${riderRoomId}`).emit("order_status_changed", payload);
-      }
+      emitSocket(io, statusRooms, "order_status_changed", payload);
+      emitSocket(io, statusRooms, "order_status_update", payload);
 
       if (status === 'ready_for_pickup') {
         io.to("riders_room").emit("ready_for_pickup", payload);
         io.to("riders_room").emit("order_status_changed", payload);
+        io.to("riders_room").emit("order_status_update", payload);
       }
 
-      if (status === 'delivered') {
-        io.to(`order_${updatedOrder.orderId}`).emit("order_status_changed", payload);
-        if (custRoomId) {
-          io.to(`user_${custRoomId}`).emit("order_status_changed", payload);
-
-          if (updatedOrder.paymentMethod === 'cod') {
-            io.to(`user_${custRoomId}`).emit("ui_payment_update", {
-              orderId: updatedOrder.orderId,
-              paymentStatus: "paid"
-            });
-          }
-        }
+      if (status === 'delivered' && custRoomId && updatedOrder.paymentMethod === 'cod') {
+        io.to(`user_${custRoomId}`).emit("ui_payment_update", {
+          orderId: updatedOrder.orderId,
+          paymentStatus: "paid"
+        });
       }
     }
 

@@ -121,35 +121,44 @@ cartSchema.methods.calculateTotal = async function () {
     total += item.price * item.quantity;
   }
 
-  this.totalAmount = total;
+  const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  this.totalAmount = roundCurrency(total);
 
-  let taxRate = 5;
-  if (this.restaurantId) {
-    const Restaurant = mongoose.model('Restaurant');
-    const restaurant = await Restaurant.findById(this.restaurantId);
-    if (restaurant && restaurant.taxRate !== undefined) {
-      taxRate = restaurant.taxRate;
-    }
-  }
-  this.tax = Math.round((total * taxRate) / 100);
-
+  let discountAmount = 0;
   // ✅ Fixed coupon handling
   if (this.coupon && this.coupon.code) {
-    let discountAmount = this.coupon.discountAmount || 0;
-    
+    discountAmount = this.coupon.discountAmount || 0;
+
     // Recalculate if needed (when cart total changes)
     if (this.coupon.type === 'percentage') {
-      discountAmount = (total * this.coupon.discount) / 100;
+      discountAmount = (this.totalAmount * this.coupon.discount) / 100;
     } else if (this.coupon.type === 'fixed') {
-      discountAmount = Math.min(this.coupon.discount, total);
+      discountAmount = Math.min(this.coupon.discount, this.totalAmount);
     }
-    
+
+    discountAmount = roundCurrency(Math.min(this.totalAmount, Math.max(0, discountAmount)));
     this.coupon.discountAmount = discountAmount;
-    this.finalAmount = total - discountAmount;
   } else {
     this.coupon = null;
-    this.finalAmount = total;
   }
+
+  let taxRate = 5;
+  let deliveryFee = 0;
+  if (this.restaurantId) {
+    const Restaurant = mongoose.model('Restaurant');
+    const restaurant = await Restaurant.findById(this.restaurantId).select('taxRate deliveryFee');
+    if (restaurant) {
+      if (restaurant.taxRate !== undefined && restaurant.taxRate !== null) {
+        taxRate = Number(restaurant.taxRate);
+      }
+      if (restaurant.deliveryFee !== undefined && restaurant.deliveryFee !== null) {
+        deliveryFee = roundCurrency(restaurant.deliveryFee);
+      }
+    }
+  }
+  const taxableAmount = roundCurrency(Math.max(0, this.totalAmount - discountAmount));
+  this.tax = roundCurrency((taxableAmount * taxRate) / 100);
+  this.finalAmount = roundCurrency(Math.max(0, taxableAmount + deliveryFee + this.tax));
 };
 
 // Pre-save middleware
