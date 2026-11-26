@@ -978,6 +978,46 @@ function initializeSocket(server) {
 
         // ==================== RIDER.JS EVENTS HANDLERS ====================
 
+        // ✅ Angular Rider Portal compatibility: join:rider & rider:duty
+        socket.on('join:rider', () => {
+            if (socket.userRole === 'rider') {
+                socket.join('riders_room');
+                socket.join('available_riders');
+                socket.join(`rider_${socket.userId}`);
+            }
+        });
+
+        socket.on('rider:duty', async (data) => {
+            try {
+                if (socket.userRole !== 'rider') return;
+                const isOnline = String(data?.status || '').toUpperCase() === 'ONLINE';
+                const isAvailable = isOnline;
+
+                await Rider.findByIdAndUpdate(socket.userId, {
+                    $set: { isOnline, isAvailable, lastLogin: new Date() },
+                }).catch(() => {});
+
+                if (isOnline) {
+                    socket.join('riders_room');
+                    socket.join('available_riders');
+                } else {
+                    socket.leave('available_riders');
+                }
+
+                socket.emit('availability_updated', { isOnline, isAvailable });
+                io.to('admin_dashboard_room').emit('admin_rider_status_update', {
+                    type: 'rider_availability',
+                    riderId: socket.userId,
+                    riderName: socket.userName,
+                    isOnline,
+                    isAvailable,
+                    timestamp: new Date(),
+                });
+            } catch (error) {
+                console.error('❌ SOCKET: rider:duty error:', error);
+            }
+        });
+
         // ✅ Rider.js: Rider availability update
         socket.on('rider_availability_updated', async (data) => {
             try {

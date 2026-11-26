@@ -18,6 +18,7 @@ const Coupon = require("../models/Coupon");
 const Rider = require("../models/Rider");
 const catalogClient = require("../utils/catalogClient");
 const { createNotification, createRestaurantNotifications } = require('../utils/notificationHelper');
+const { calculateDistance, calculateDeliveryEarnings } = require('../utils/deliveryUtils');
 
 // Helper to emit socket events safely
 function emitSocket(io, rooms = [], event, data) {
@@ -925,6 +926,25 @@ exports.updateOrderStatus = async (req, res, next) => {
         io.to("riders_room").emit("ready_for_pickup", payload);
         io.to("riders_room").emit("order_status_changed", payload);
         io.to("riders_room").emit("order_status_update", payload);
+
+        const routeSnapshot = buildRoute(orderObj);
+        const rLat = routeSnapshot?.restaurantLocation?.lat;
+        const rLng = routeSnapshot?.restaurantLocation?.lng;
+        const cLat = routeSnapshot?.customerLocation?.lat;
+        const cLng = routeSnapshot?.customerLocation?.lng;
+        const tripDistanceKm =
+          rLat && rLng && cLat && cLng ? calculateDistance(rLat, rLng, cLat, cLng) : 2.0;
+
+        io.to("riders_room").emit("order:offer:rider", {
+          orderId: updatedOrder.orderId,
+          restaurantName: updatedOrder.restaurantId?.name || "Restaurant",
+          restaurantAddress: routeSnapshot?.restaurantLocation?.address || "",
+          customerAddress: routeSnapshot?.customerLocation?.address || "",
+          pickupDistanceKm: 0,
+          tripDistanceKm,
+          estimatedEarning: calculateDeliveryEarnings(tripDistanceKm, updatedOrder.finalAmount),
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        });
       }
 
       if (status === 'delivered' && custRoomId && updatedOrder.paymentMethod === 'cod') {
