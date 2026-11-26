@@ -162,4 +162,18 @@ To scale the platform to 100,000+ daily active users with 99.99% uptime:
 | **FoodBE** (Core) | `zewito-catalog-service` | `GET /internal/v1/restaurant/owner/:ownerId` | HTTP (`X-Internal-Secret`) | Resolves outlet metadata & ID by partner owner ID when resolving order permissions. |
 | **Logistics Service** | `zewito-catalog-service` | `GET /internal/v1/restaurant/:restaurantId` | HTTP (`X-Internal-Secret`) | Verifies restaurant ownership, bank account details, and active status for payout settlements. |
 | **Logistics Service** | `FoodBE` (Core) | `GET /api/v1/internal/restaurants/:restaurantId/analytics` | HTTP (`X-Internal-Secret`) | Fetches verified gross sales to compute 15% platform commission and wallet balance. |
+| **Admin Service** | `zewito-auth-service` | `GET /api/v1/auth/internal/users` & `/:userId` | HTTP (`X-Internal-Secret`) | Powers paginated Users Directory (`customer`/`rider`/`restaurant`) and account status moderation. |
+| **Admin Service** | `zewito-catalog-service` | `PATCH /internal/v1/restaurants/:restaurantId/tax-rate` | HTTP (`X-Internal-Secret`) | Allows Super Admin to configure `0%` (Non-GST) or `5%`+ tax rates per restaurant. |
+
+---
+
+## 🔄 6. November 2026 Architecture Updates (Tax, KYC & Real-Time Sockets)
+
+1. **Authoritative Billing & GST Pipeline**:
+   - Cart (`zewito-catalog-service`), Checkout (`FoodFE/delivery-hub`), and Order creation (`FoodBE/controllers/orderController.js`) all enforce `tax = round2((Math.max(0, subtotal - discount) * taxRate) / 100)` with 2-decimal precision and nullish `taxRate ?? 5` handling for `0%` non-GST outlets.
+2. **Multi-Client Socket.io Topology & Coordinate Guards**:
+   - `FoodBE/middlewares/socket.js` accepts `rider_app_location_update`, `rider_location_update`, `join:rider`, and `rider:duty`, rejecting invalid `(0, 0)` coordinates to prevent distance calculation anomalies (`8,500+ km`).
+   - `updateOrderStatus` emits both `order_status_changed` and `order_status_update`, plus `order:offer:rider` on `ready_for_pickup`.
+3. **Deployment Transition**:
+   - Production hosting uses Render (`zewito-api-gateway-rfll.onrender.com` and service blueprints); legacy Azure Container Apps deployment workflow (`.github/workflows/deploy.yml`) is scheduled for removal.
 

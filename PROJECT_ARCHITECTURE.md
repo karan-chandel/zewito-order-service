@@ -1728,9 +1728,23 @@ npm run dev
 
 ---
 
-**Document Last Updated:** January 24, 2026  
-**Project Status:** Active Development  
-**Next Review Date:** Q2 2026
+**Document Last Updated:** November 26, 2026  
+**Project Status:** Production Microservices Fleet (Render Cloud)  
+**Next Review Date:** Q1 2027
+
+---
+
+## 🔄 RECENT ARCHITECTURE UPDATES (NOVEMBER 25–26, 2026)
+
+1. **GST Billing & Rounding Consistency (`controllers/orderController.js`, `models/Cart.js`)**:
+   - Unified 2-decimal `roundCurrency` math matching Catalog `Cart.js` (`billSummary`) and `FoodFE/delivery-hub` checkout: `taxRate` applies after coupon discount (`taxableAmount = Math.max(0, subtotal - discount)`).
+2. **Cross-Service Verification Sync (`routes/internal/index.js`)**:
+   - `POST /api/v1/internal/verify-user` and `POST /api/v1/internal/restaurant-sync` prioritize `ownerId` and match both `_id` and `restaurantId` so Admin KYC approvals sync cleanly across Catalog, Auth, and Core DBs.
+3. **Socket.io Multi-Client Location, Status & Angular Rider Support (`middlewares/socket.js`, `controllers/orderController.js`)**:
+   - Unified rider location broadcast for both `rider_app_location_update` and `rider_location_update`, filtering invalid `(0, 0)` coordinates and emitting across `order_${orderId}`, `order_${_id}`, `user_${customerId}`, and `restaurant_${restaurantId}`.
+   - `updateOrderStatus` emits both `order_status_changed` and `order_status_update`, plus `order:offer:rider` (`OrderOfferPayload`) on `ready_for_pickup`; added `join:rider` and `rider:duty` handlers.
+4. **Deployment Pipeline Notice**:
+   - Active production runs via Render (`render.yaml` + `zewito-api-gateway-rfll.onrender.com`); legacy `.github/workflows/deploy.yml` (Azure Container Apps) is marked for removal & secret revocation.
 
 ---
 
