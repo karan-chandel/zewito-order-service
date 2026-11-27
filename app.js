@@ -129,6 +129,7 @@ app.use((req, res, next) => {
 // Order lifecycle (customer, restaurant, rider dispatch)
 app.use(`/api/${API_VERSION}/orders`, require('./routes/customer/orders'));
 app.use(`/api/${API_VERSION}/orders`, require('./routes/restaurant/orders'));
+app.use(`/api/${API_VERSION}/restaurant/orders`, require('./routes/restaurant/orders'));
 app.use(`/api/${API_VERSION}/orders`, require('./routes/rider/orders'));
 app.use(`/api/${API_VERSION}/orders`, require('./routes/rider/location'));
 

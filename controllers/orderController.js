@@ -49,6 +49,26 @@ function calculateDeliveryProgress(status) {
   return progressMap[status] || 0;
 }
 
+// Parse restaurant prep/delivery minutes from numbers or strings like "30-45 mins"
+function parseDeliveryMinutes(rawValue, fallback = 30) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") {
+    return fallback;
+  }
+  const numeric = typeof rawValue === "number" ? rawValue : parseInt(String(rawValue), 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+  return Math.min(300, Math.round(numeric));
+}
+
+// Ensure consistent countdown timer fields across all order GET/mutation responses
+function enrichOrderTiming(orderObj) {
+  if (!orderObj) return orderObj;
+  orderObj.estimatedDeliveryMinutes = parseDeliveryMinutes(orderObj.estimatedDeliveryMinutes, 30);
+  orderObj.orderConfirmedAt = orderObj.orderConfirmedAt || null;
+  return orderObj;
+}
+
 // Enhanced helper function to build route with proper coordinates
 function buildRoute(orderObj) {
   if (!orderObj.restaurantId || !orderObj.deliveryAddress) {
@@ -281,7 +301,10 @@ exports.createOrder = async (req, res, next) => {
 
     // ── 5. Delivery Route & Estimated Time ───────────────────────────────────
     const restAddress = restaurantSnapshot.address || {};
-    const deliveryTime = Number(restaurantSnapshot.deliveryTime) || 30;
+    const deliveryTime = parseDeliveryMinutes(
+      restaurantSnapshot.avgPrepTime ?? restaurantSnapshot.deliveryTime,
+      30
+    );
     const estimatedDelivery = new Date(Date.now() + deliveryTime * 60000);
 
     // 🛡️ Robust coordinate resolution for client payload (supports lat/lng, latitude/longitude, or top-level)
@@ -373,6 +396,8 @@ exports.createOrder = async (req, res, next) => {
       specialInstructions,
       status: "pending",
       estimatedDelivery,
+      estimatedDeliveryMinutes: deliveryTime,
+      orderConfirmedAt: null,
       statusHistory: [{ status: "pending", timestamp: new Date(), updatedBy: req.user._id }],
     });
 
@@ -430,6 +455,9 @@ exports.createOrder = async (req, res, next) => {
         finalAmount: order.finalAmount,
         paymentStatus: order.paymentStatus,
         paymentMethod: order.paymentMethod,
+        estimatedDelivery: order.estimatedDelivery,
+        estimatedDeliveryMinutes: order.estimatedDeliveryMinutes,
+        orderConfirmedAt: order.orderConfirmedAt,
         timestamp: new Date(),
       };
 
@@ -485,6 +513,7 @@ exports.createOrder = async (req, res, next) => {
 
     const orderData = populatedOrder ? populatedOrder.toObject() : order.toObject();
     orderData.deliveryProgress = 10;
+    enrichOrderTiming(orderData);
     const builtRoute = buildRoute(orderData);
     if (builtRoute) {
       orderData.route = builtRoute;
@@ -501,6 +530,8 @@ exports.createOrder = async (req, res, next) => {
         couponDiscount: discountApplied || 0,
         finalAmount,
         estimatedDelivery,
+        estimatedDeliveryMinutes: orderData.estimatedDeliveryMinutes,
+        orderConfirmedAt: orderData.orderConfirmedAt,
         orderId: order.orderId,
       },
     });
@@ -663,6 +694,7 @@ exports.getMyOrders = async (req, res, next) => {
     }
 
     orderObj.deliveryProgress = calculateDeliveryProgress(orderObj.status);
+      enrichOrderTiming(orderObj);
       return orderObj;
     });
 
@@ -750,6 +782,7 @@ exports.getOrderById = async (req, res, next) => {
     }
 
     orderObj.deliveryProgress = calculateDeliveryProgress(orderObj.status);
+    enrichOrderTiming(orderObj);
     res.json({ success: true, data: orderObj });
   } catch (err) {
     next(err);
@@ -760,16 +793,35 @@ exports.getOrderById = async (req, res, next) => {
 exports.updateOrderStatus = async (req, res, next) => {
   try {
     const { orderId } = req.params;
-    const { location, note } = req.body;
-    const status = typeof req.body.status === 'string' ? req.body.status.toLowerCase().trim() : req.body.status;
+    const { location, note, estimatedDeliveryMinutes: rawEtaMinutes } = req.body;
+    const hasStatusInput = req.body.status !== undefined && req.body.status !== null && String(req.body.status).trim() !== "";
+    const hasEtaInput = rawEtaMinutes !== undefined && rawEtaMinutes !== null && String(rawEtaMinutes).trim() !== "";
+
+    let status = typeof req.body.status === 'string' ? req.body.status.toLowerCase().trim() : req.body.status;
 
     const validStatuses = [
       'confirmed', 'preparing', 'ready_for_pickup', 'out_for_delivery',
       'delivered', 'cancelled', 'picked_up', 'assigned_to_rider'
     ];
 
-    if (!validStatuses.includes(status)) {
+    if (hasStatusInput && !validStatuses.includes(status)) {
       return res.status(400).json({ success: false, error: "Invalid status" });
+    }
+
+    if (!hasStatusInput && !hasEtaInput) {
+      return res.status(400).json({ success: false, error: "Status or estimatedDeliveryMinutes is required" });
+    }
+
+    let parsedEtaMinutes = null;
+    if (hasEtaInput) {
+      const numericEta = Number(rawEtaMinutes);
+      if (!Number.isFinite(numericEta) || numericEta < 1 || numericEta > 300) {
+        return res.status(400).json({
+          success: false,
+          error: "estimatedDeliveryMinutes must be a valid number between 1 and 300"
+        });
+      }
+      parsedEtaMinutes = Math.round(numericEta);
     }
 
     const order = await Order.findOne(getOrderQuery(orderId))
@@ -799,24 +851,56 @@ exports.updateOrderStatus = async (req, res, next) => {
     }
 
     if (req.user.role === 'rider') {
+      if (hasEtaInput) {
+        return res.status(403).json({
+          success: false,
+          error: "Only restaurant or admin can update estimatedDeliveryMinutes"
+        });
+      }
       const orderRiderId = (order.riderId?._id || order.riderId)?.toString();
       if (!orderRiderId || orderRiderId !== req.user._id.toString()) {
         return res.status(403).json({ success: false, error: "Not allowed" });
       }
     }
 
+    if (!hasStatusInput) {
+      status = order.status;
+    }
+
+    const statusChanged = status !== order.status;
     order.status = status;
 
-    const statusUpdate = {
-      status,
-      timestamp: new Date(),
-      updatedBy: req.user._id,
-      ...(location && { location }),
-      ...(note && { note })
-    };
+    if (statusChanged || note || location) {
+      const statusUpdate = {
+        status,
+        timestamp: new Date(),
+        updatedBy: req.user._id,
+        ...(location && { location }),
+        ...(note && { note })
+      };
+      order.statusHistory.push(statusUpdate);
+    }
 
-    order.statusHistory.push(statusUpdate);
     order.deliveryInfo = order.deliveryInfo || {};
+
+    // Start live countdown timer when restaurant confirms/prepares the order (preserve original timestamp)
+    let confirmedJustSet = false;
+    if ((status === 'confirmed' || status === 'preparing') && !order.orderConfirmedAt) {
+      order.orderConfirmedAt = new Date();
+      confirmedJustSet = true;
+    }
+
+    if (parsedEtaMinutes !== null && ['restaurant', 'admin'].includes(req.user.role)) {
+      order.estimatedDeliveryMinutes = parsedEtaMinutes;
+    } else if (order.estimatedDeliveryMinutes === undefined || order.estimatedDeliveryMinutes === null) {
+      order.estimatedDeliveryMinutes = 30;
+    }
+
+    if (parsedEtaMinutes !== null || confirmedJustSet) {
+      const countdownAnchor = order.orderConfirmedAt || order.createdAt || new Date();
+      const etaMins = parseDeliveryMinutes(order.estimatedDeliveryMinutes, 30);
+      order.estimatedDelivery = new Date(countdownAnchor.getTime() + etaMins * 60000);
+    }
 
     if (status === 'ready_for_pickup')
       order.deliveryInfo.readyAt = new Date();
@@ -889,6 +973,7 @@ exports.updateOrderStatus = async (req, res, next) => {
     }
 
     orderObj.deliveryProgress = calculateDeliveryProgress(orderObj.status);
+    enrichOrderTiming(orderObj);
 
     const io = req.app.get('io');
     if (io) {
@@ -897,6 +982,9 @@ exports.updateOrderStatus = async (req, res, next) => {
         orderId: updatedOrder.orderId,
         status: updatedOrder.status,
         deliveryProgress: orderObj.deliveryProgress,
+        estimatedDeliveryMinutes: orderObj.estimatedDeliveryMinutes,
+        orderConfirmedAt: orderObj.orderConfirmedAt,
+        estimatedDelivery: updatedOrder.estimatedDelivery || null,
         customerId: updatedOrder.customerId?._id,
         restaurantId: updatedOrder.restaurantId?._id,
         riderId: updatedOrder.riderId?._id,
@@ -1286,6 +1374,7 @@ exports.trackOrder = async (req, res, next) => {
     }
 
     orderObj.deliveryProgress = calculateDeliveryProgress(orderObj.status);
+    enrichOrderTiming(orderObj);
 
     res.json({
       success: true,

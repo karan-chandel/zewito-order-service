@@ -150,6 +150,8 @@ const orderSchema = new mongoose.Schema({
 
   specialInstructions: String,
   estimatedDelivery: Date,
+  estimatedDeliveryMinutes: { type: Number, default: 30 },
+  orderConfirmedAt: { type: Date, default: null },
   deliveredAt: Date,
   cancelledAt: Date,
 

@@ -544,6 +544,8 @@ function initializeSocket(server) {
                     restaurantName: data.restaurantName,
                     totalAmount: data.totalAmount,
                     estimatedDelivery: data.estimatedDelivery,
+                    estimatedDeliveryMinutes: data.estimatedDeliveryMinutes ?? 30,
+                    orderConfirmedAt: data.orderConfirmedAt || new Date(),
                     status: data.status,
                     message: data.message,
                     timestamp: new Date()
@@ -610,32 +612,38 @@ function initializeSocket(server) {
                 }
                 console.log(`🔄 SOCKET: Order status update - ${data.orderId}: ${data.status}`);
 
+                const statusPayload = {
+                    orderId: data.orderId,
+                    status: data.status,
+                    deliveryProgress: data.deliveryProgress,
+                    estimatedDeliveryMinutes: data.estimatedDeliveryMinutes ?? null,
+                    orderConfirmedAt: data.orderConfirmedAt ?? null,
+                    estimatedDelivery: data.estimatedDelivery ?? null,
+                    timestamp: new Date()
+                };
+
                 // Customer ko
                 if (data.customerId) {
-                    io.to(`user_${data.customerId}`).emit('order_status_changed', {
-                        orderId: data.orderId,
-                        status: data.status,
-                        deliveryProgress: data.deliveryProgress,
-                        timestamp: new Date()
-                    });
+                    io.to(`user_${data.customerId}`).emit('order_status_changed', statusPayload);
+                    io.to(`user_${data.customerId}`).emit('order_status_update', statusPayload);
                 }
 
                 // Restaurant ko
                 if (data.restaurantId) {
-                    io.to(`restaurant_${data.restaurantId}`).emit('restaurant_order_status', {
-                        orderId: data.orderId,
-                        status: data.status,
-                        timestamp: new Date()
-                    });
+                    io.to(`restaurant_${data.restaurantId}`).emit('restaurant_order_status', statusPayload);
+                    io.to(`restaurant_${data.restaurantId}`).emit('order_status_changed', statusPayload);
+                    io.to(`restaurant_${data.restaurantId}`).emit('order_status_update', statusPayload);
+                }
+
+                // Order room ko
+                if (data.orderId) {
+                    io.to(`order_${data.orderId}`).emit('order_status_changed', statusPayload);
+                    io.to(`order_${data.orderId}`).emit('order_status_update', statusPayload);
                 }
 
                 // Rider ko
                 if (data.riderId) {
-                    io.to(`rider_${data.riderId}`).emit('rider_order_status', {
-                        orderId: data.orderId,
-                        status: data.status,
-                        timestamp: new Date()
-                    });
+                    io.to(`rider_${data.riderId}`).emit('rider_order_status', statusPayload);
                 }
 
             } catch (error) {
