@@ -1,1 +1,66 @@
-##
+name: Deploy Zewito Order Service to Azure VM
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies & syntax check
+        run: |
+          npm ci --omit=dev
+          node --check server.js
+          if [ -f app.js ]; then node --check app.js; fi
+
+      - name: Verify Docker build
+        run: docker build -t zewito-order-service:ci .
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Azure VM deployment secrets
+        id: check_secrets
+        env:
+          AZURE_VM_HOST: ${{ secrets.AZURE_VM_HOST }}
+          AZURE_VM_USER: ${{ secrets.AZURE_VM_USER }}
+          AZURE_VM_SSH_KEY: ${{ secrets.AZURE_VM_SSH_KEY }}
+        run: |
+          if [ -n "$AZURE_VM_HOST" ] && [ -n "$AZURE_VM_USER" ] && [ -n "$AZURE_VM_SSH_KEY" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Azure VM secrets (AZURE_VM_HOST, AZURE_VM_USER, AZURE_VM_SSH_KEY) not configured yet — skipping SSH deploy."
+          fi
+
+      - name: Deploy core-backend to Azure Ubuntu VM
+        if: steps.check_secrets.outputs.ready == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.AZURE_VM_HOST }}
+          username: ${{ secrets.AZURE_VM_USER }}
+          key: ${{ secrets.AZURE_VM_SSH_KEY }}
+          port: ${{ secrets.AZURE_VM_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            APP_DIR="/opt/zewito"
+            git -C "$APP_DIR/FoodBE" fetch origin main
+            git -C "$APP_DIR/FoodBE" reset --hard origin/main
+            cd "$APP_DIR"
+            docker compose -f docker-compose.prod.yml --env-file .env up -d --build --no-deps core-backend
+            sleep 5
+            docker compose -f docker-compose.prod.yml ps core-backend
+            docker image prune -f
