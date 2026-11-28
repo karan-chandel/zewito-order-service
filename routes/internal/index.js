@@ -44,14 +44,19 @@ router.use(internalAuth);
  */
 router.post("/rider-sync", async (req, res, next) => {
   try {
-    const { riderId, riderName, isOnline, isAvailable, location, profile } = req.body;
-    if (!riderId) {
-      return res.status(400).json({ success: false, error: "riderId is required" });
+    const { riderId, riderName, phone, isOnline, isAvailable, location, profile } = req.body;
+    if (!riderId && !phone && !profile?.phone) {
+      return res.status(400).json({ success: false, error: "riderId or phone is required" });
     }
 
+    const effectivePhone = String(phone || profile?.phone || "").trim();
     const updateSet = {};
+    if (riderName && !/^Rider[_\d]+/i.test(String(riderName).trim())) {
+      updateSet.name = String(riderName).trim();
+    }
     if (typeof isOnline === "boolean") updateSet.isOnline = isOnline;
     if (typeof isAvailable === "boolean") updateSet.isAvailable = isAvailable;
+    if (effectivePhone) updateSet.phone = effectivePhone;
     if (location && location.lat !== undefined && location.lng !== undefined) {
       updateSet.currentLocation = {
         lat: Number(location.lat),
@@ -70,6 +75,8 @@ router.post("/rider-sync", async (req, res, next) => {
         "licenseNumber",
         "licensePhoto",
         "vehiclePhoto",
+        "verificationStatus",
+        "isProfileComplete",
         "isVerified",
       ];
       for (const field of allowedFields) {
@@ -79,20 +86,38 @@ router.post("/rider-sync", async (req, res, next) => {
 
     let rider = null;
     if (Object.keys(updateSet).length > 0) {
-      rider = await Rider.findByIdAndUpdate(
-        riderId,
-        { $set: updateSet },
-        { new: true }
-      );
+      if (riderId && mongoose.Types.ObjectId.isValid(riderId)) {
+        rider = await Rider.findByIdAndUpdate(riderId, { $set: updateSet }, { new: true });
+      }
+
+      if (!rider && effectivePhone) {
+        rider = await Rider.findOneAndUpdate(
+          { phone: effectivePhone },
+          { $set: updateSet },
+          { new: true }
+        );
+      }
+
+      if (!rider && riderId && mongoose.Types.ObjectId.isValid(riderId) && effectivePhone) {
+        rider = await Rider.findByIdAndUpdate(
+          riderId,
+          {
+            $set: updateSet,
+            $setOnInsert: { role: "rider", isActive: true },
+          },
+          { new: true, upsert: true }
+        );
+      }
 
       // Synchronize with User collection as well
+      const targetUserId = rider?._id || riderId;
       const userUpdates = {};
       const isPlaceholder = (n) => !n || /^User[_\d]+/i.test(String(n).trim()) || /^Rider[_\d]+/i.test(String(n).trim());
       if (updateSet.name && !isPlaceholder(updateSet.name)) userUpdates.name = updateSet.name;
       if (updateSet.email) userUpdates.email = updateSet.email;
       if (typeof updateSet.isVerified === "boolean") userUpdates.isVerified = updateSet.isVerified;
-      if (Object.keys(userUpdates).length > 0) {
-        User.findByIdAndUpdate(riderId, { $set: userUpdates }).catch(() => {});
+      if (targetUserId && Object.keys(userUpdates).length > 0) {
+        User.findByIdAndUpdate(targetUserId, { $set: userUpdates }).catch(() => {});
       }
     }
 

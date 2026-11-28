@@ -477,11 +477,16 @@ exports.updateRiderLocation = async (req, res, next) => {
 // ✅ Get Available Orders for Rider
 exports.getAvailableOrders = async (req, res, next) => {
   try {
-    const rider = await riderClient.getRiderById(req.user._id);
+    const rider = await riderClient.getRiderById(req.user._id, req.user.phone);
     if (!rider || !rider.isOnline || !rider.isAvailable) {
       return res.status(400).json({
         success: false,
-        message: 'Rider is not available for orders'
+        message: 'Rider is not available for orders',
+        details: {
+          riderFound: Boolean(rider),
+          isOnline: Boolean(rider?.isOnline),
+          isAvailable: Boolean(rider?.isAvailable),
+        },
       });
     }
 
@@ -530,7 +535,7 @@ exports.getAvailableOrders = async (req, res, next) => {
 // ✅ Accept Order for Delivery
 exports.acceptOrder = async (req, res, next) => {
   try {
-    const rider = await riderClient.getRiderById(req.user._id);
+    const rider = await riderClient.getRiderById(req.user._id, req.user.phone);
     if (!rider || !rider.isAvailable) {
       return res.status(400).json({
         success: false,

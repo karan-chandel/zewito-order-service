@@ -17,14 +17,14 @@ function getInternalHeaders() {
 /**
  * Fetches rider metadata from zewito-rider-service with resilient fallback to local Rider collection.
  */
-async function getRiderById(riderId) {
+async function getRiderById(riderId, phone = null) {
   const baseUrl = (RIDER_SERVICE_URL || "").replace(/\/+$/, "");
   if (baseUrl && riderId) {
     try {
       const res = await fetch(`${baseUrl}/internal/v1/rider/${encodeURIComponent(String(riderId))}`, {
         method: "GET",
         headers: getInternalHeaders(),
-        signal: AbortSignal.timeout(2500),
+        signal: AbortSignal.timeout(8000),
       });
       if (res.ok) {
         const json = await res.json();
@@ -37,7 +37,11 @@ async function getRiderById(riderId) {
     }
   }
 
-  return Rider.findById(riderId);
+  let localRider = riderId ? await Rider.findById(riderId) : null;
+  if (!localRider && phone) {
+    localRider = await Rider.findOne({ phone: String(phone).trim() });
+  }
+  return localRider;
 }
 
 /**

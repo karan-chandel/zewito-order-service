@@ -54,6 +54,7 @@ const authenticateToken = async (req, res, next) => {
       
     } else {
       // ✅ REGULAR USER TOKEN - Check role-specific collections first to resolve actual Mongoose model
+      const isPlaceholder = (n) => !n || /^User[_\d]+/i.test(String(n).trim()) || /^Rider[_\d]+/i.test(String(n).trim()) || /^Partner[_\d]+/i.test(String(n).trim());
       let user = null;
       if (decoded.role === 'customer') {
         user = await Customer.findById(decoded.userId);
@@ -62,7 +63,6 @@ const authenticateToken = async (req, res, next) => {
         }
 
         // 🛡️ Auto-Heal Customer Name: If existing record has placeholder User_xxxx / Userxxxx, update with decoded real name
-        const isPlaceholder = (n) => !n || /^User[_\d]+/i.test(String(n).trim()) || /^Rider[_\d]+/i.test(String(n).trim()) || /^Partner[_\d]+/i.test(String(n).trim());
         if (user && decoded.name && isPlaceholder(user.name) && !isPlaceholder(decoded.name)) {
           user.name = decoded.name;
           if (decoded.email && !user.email) user.email = decoded.email;
