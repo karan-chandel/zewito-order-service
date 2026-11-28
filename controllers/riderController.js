@@ -10,6 +10,50 @@ const { recordRiderLocation, shouldPersistToDb } = require('../utils/redisTracki
 const path = require('path');
 const fs = require('fs');
 
+const isValidCoord = (lat, lng) =>
+  typeof lat === 'number' &&
+  typeof lng === 'number' &&
+  Number.isFinite(lat) &&
+  Number.isFinite(lng) &&
+  !(lat === 0 && lng === 0) &&
+  Math.abs(lat) <= 90 &&
+  Math.abs(lng) <= 180;
+
+/**
+ * Resolves valid restaurant & customer coordinates across route snapshot,
+ * restaurantId.coordinates, restaurantId.address.geolocation, and deliveryAddress.
+ */
+function computeOrderDistanceAndEarnings(order) {
+  const restLat = Number(
+    order?.restaurantId?.coordinates?.lat ??
+      order?.restaurantId?.address?.geolocation?.latitude ??
+      order?.route?.restaurantLocation?.lat
+  );
+  const restLng = Number(
+    order?.restaurantId?.coordinates?.lng ??
+      order?.restaurantId?.address?.geolocation?.longitude ??
+      order?.route?.restaurantLocation?.lng
+  );
+
+  const custLat = Number(
+    order?.deliveryAddress?.coordinates?.lat ??
+      order?.route?.customerLocation?.lat
+  );
+  const custLng = Number(
+    order?.deliveryAddress?.coordinates?.lng ??
+      order?.route?.customerLocation?.lng
+  );
+
+  let deliveryDistance = 0;
+  if (isValidCoord(restLat, restLng) && isValidCoord(custLat, custLng)) {
+    deliveryDistance = calculateDistance(restLat, restLng, custLat, custLng);
+  }
+
+  const roundedDistance = Math.round(deliveryDistance * 100) / 100;
+  const estimatedEarnings = calculateDeliveryEarnings(roundedDistance, order?.finalAmount);
+  return { deliveryDistance: roundedDistance, estimatedEarnings };
+}
+
 // Helper to emit socket events safely
 function emitSocket(io, rooms = [], event, data) {
   try {
@@ -499,24 +543,11 @@ exports.getAvailableOrders = async (req, res, next) => {
       .limit(20);
 
     const ordersWithDistance = availableOrders.map(order => {
-      const restCoords = order.restaurantId?.coordinates;
-      const custCoords = order.deliveryAddress?.coordinates;
-
-      const restLat = restCoords?.lat;
-      const restLng = restCoords?.lng;
-      const custLat = custCoords?.lat;
-      const custLng = custCoords?.lng;
-
-      let deliveryDistance = 0;
-      if (restLat && restLng && custLat && custLng) {
-        deliveryDistance = calculateDistance(restLat, restLng, custLat, custLng);
-      }
-
-      const estimatedEarnings = calculateDeliveryEarnings(deliveryDistance, order.finalAmount);
+      const { deliveryDistance, estimatedEarnings } = computeOrderDistanceAndEarnings(order);
 
       return {
         ...order.toObject(),
-        deliveryDistance: Math.round(deliveryDistance * 100) / 100,
+        deliveryDistance,
         estimatedEarnings
       };
     });
@@ -551,7 +582,7 @@ exports.acceptOrder = async (req, res, next) => {
     };
 
     const existingOrder = await Order.findOne(orderQuery)
-      .populate('restaurantId', 'name coordinates')
+      .populate('restaurantId', 'name address coordinates')
       .populate('customerId', 'name phone');
 
     if (!existingOrder) {
@@ -575,20 +606,7 @@ exports.acceptOrder = async (req, res, next) => {
       });
     }
 
-    const restCoords = existingOrder.restaurantId?.coordinates;
-    const custCoords = existingOrder.deliveryAddress?.coordinates;
-
-    const restLat = restCoords?.lat;
-    const restLng = restCoords?.lng;
-    const custLat = custCoords?.lat;
-    const custLng = custCoords?.lng;
-
-    let deliveryDistance = 0;
-    if (restLat && restLng && custLat && custLng) {
-      deliveryDistance = calculateDistance(restLat, restLng, custLat, custLng);
-    }
-
-    const estimatedEarnings = calculateDeliveryEarnings(deliveryDistance, existingOrder.finalAmount);
+    const { deliveryDistance, estimatedEarnings } = computeOrderDistanceAndEarnings(existingOrder);
     const estimatedDeliveryTime = new Date(Date.now() + 30 * 60 * 1000);
 
     // Atomic conditional update prevents concurrent double-accept race conditions
