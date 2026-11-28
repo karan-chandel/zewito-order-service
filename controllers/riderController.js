@@ -42,6 +42,36 @@ exports.getRiderProfile = async (req, res, next) => {
   }
 };
 
+// ✅ Get rider account / KYC status
+exports.getRiderStatus = async (req, res, next) => {
+  try {
+    const rider = await Rider.findOne({ _id: req.user._id }).lean();
+    if (!rider) {
+      return res.status(404).json({
+        success: false,
+        message: 'Rider not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        riderId: rider._id,
+        isVerified: Boolean(rider.isVerified),
+        verificationStatus: rider.verificationStatus || (rider.isVerified ? 'approved' : 'incomplete'),
+        isProfileComplete: Boolean(rider.isProfileComplete || (rider.vehicleNo && rider.licenseNumber)),
+        rejectionReason: rider.rejectionReason || null,
+        isActive: rider.isActive !== false,
+        isOnline: Boolean(rider.isOnline),
+        isAvailable: Boolean(rider.isAvailable),
+        currentOrder: rider.currentOrder || null
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ✅ Complete Registration + Profile Update
 exports.updateRiderProfile = async (req, res, next) => {
   try {
@@ -288,8 +318,36 @@ exports.updateRiderAvailability = async (req, res, next) => {
       });
     }
 
+    if (!rider.isVerified && rider.verificationStatus !== 'approved') {
+      return res.status(403).json({
+        success: false,
+        code: 'KYC_NOT_APPROVED',
+        error: 'Your rider account is pending verification. Please contact admin.',
+        verificationStatus: rider.verificationStatus || 'incomplete'
+      });
+    }
+
+    const goingOfflineOrUnavailable = isOnline === false || isAvailable === false;
+    if (goingOfflineOrUnavailable) {
+      const activeOrder = rider.currentOrder || (await Order.findOne({
+        riderId: rider._id,
+        status: { $in: ['assigned_to_rider', 'picked_up', 'out_for_delivery', 'arrived_at_location'] }
+      }).select('_id orderId').lean());
+
+      if (activeOrder) {
+        return res.status(409).json({
+          success: false,
+          code: 'ACTIVE_ORDER_IN_PROGRESS',
+          error: 'Cannot go offline or mark unavailable while an active order is in progress',
+          message: 'Complete your current active order before going offline',
+          currentOrder: activeOrder._id || activeOrder
+        });
+      }
+    }
+
     if (isOnline !== undefined) rider.isOnline = isOnline;
     if (isAvailable !== undefined) rider.isAvailable = isAvailable;
+    if (isOnline === false && isAvailable === undefined) rider.isAvailable = false;
 
     await rider.save();
 
@@ -703,7 +761,7 @@ exports.updateOrderStatusByRider = async (req, res, next) => {
       order.deliveryInfo.deliveredAt = new Date();
       order.deliveryInfo.actualDeliveryTime = new Date();
 
-      if (order.paymentMethod === 'cod' && order.paymentStatus !== 'paid') {
+      if (['cod', 'cash_on_delivery'].includes(order.paymentMethod) && order.paymentStatus !== 'paid') {
         order.paymentStatus = 'paid';
       }
 
@@ -764,12 +822,29 @@ exports.updateOrderStatusByRider = async (req, res, next) => {
         riderName: rider.name,
         customerId: order.customerId?._id,
         restaurantId: order.restaurantId?._id,
+        estimatedDeliveryMinutes: order.estimatedDeliveryMinutes ?? 30,
+        orderConfirmedAt: order.orderConfirmedAt || null,
+        paymentStatus: order.paymentStatus,
         note,
         timestamp: new Date()
       });
 
+      const statusPayload = {
+        _id: order._id,
+        orderId: order.orderId,
+        status,
+        estimatedDeliveryMinutes: order.estimatedDeliveryMinutes ?? 30,
+        orderConfirmedAt: order.orderConfirmedAt || null,
+        paymentStatus: order.paymentStatus,
+        paymentMethod: order.paymentMethod,
+        riderId: rider._id,
+        timestamp: new Date()
+      };
+      emitSocket(io, rooms, 'order_status_changed', statusPayload);
+      emitSocket(io, rooms, 'order_status_update', statusPayload);
+
       const custPaymentId = (order.customerId?._id || order.customerId)?.toString();
-      if (status === 'delivered' && order.paymentMethod === 'cod' && custPaymentId) {
+      if (status === 'delivered' && ['cod', 'cash_on_delivery'].includes(order.paymentMethod) && custPaymentId) {
         io.to(`user_${custPaymentId}`).emit('payment_update', {
           orderId: order.orderId,
           paymentStatus: 'paid'

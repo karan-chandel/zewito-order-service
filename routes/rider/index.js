@@ -9,7 +9,10 @@ router.use('/orders', require('./orders'));
 router.use('/location', require('./location'));
 
 // Direct aliases for Rider Portal compatibility
-router.put('/availability', auth, requireRole(['rider', 'admin', 'super_admin']), riderController.updateRiderAvailability);
+router.get('/status', auth, requireRole(['rider', 'admin', 'super_admin']), riderController.getRiderStatus);
+router.route('/availability')
+  .put(auth, requireRole(['rider', 'admin', 'super_admin']), riderController.updateRiderAvailability)
+  .patch(auth, requireRole(['rider', 'admin', 'super_admin']), riderController.updateRiderAvailability);
 router.get('/earnings', auth, requireRole(['rider', 'admin', 'super_admin']), riderController.getRiderEarnings);
 router.get('/history', auth, requireRole(['rider', 'admin', 'super_admin']), riderController.getRiderHistory);
 

@@ -10,6 +10,8 @@ router.get('/available', riderController.getAvailableOrders);
 router.put('/:orderId/accept', riderController.acceptOrder);
 router.get('/accepted', riderController.getAcceptedOrders);
 router.get('/current', riderController.getCurrentOrders);
-router.put('/:orderId/status', riderController.updateOrderStatusByRider);
+router.route('/:orderId/status')
+  .put(riderController.updateOrderStatusByRider)
+  .patch(riderController.updateOrderStatusByRider);
 
 module.exports = router;
